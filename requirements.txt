@@ -1,16 +1,9 @@
-# Core
-gradio>=6.0.0
-numpy
-soundfile
-
 # Audio Enhancement
 deepfilternet
 pedalboard
 pydub
-
-# PyTorch (CPU for free tier)
-torch
-torchaudio
+numpy
+soundfile
 
 # Text-to-Speech
 edge-tts
