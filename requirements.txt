@@ -1,7 +1,5 @@
 # Core
 gradio>=6.0.0
-torch<2.9
-torchaudio<2.9
 numpy
 soundfile
 
@@ -10,11 +8,9 @@ deepfilternet
 pedalboard
 pydub
 
-# Audio Extraction (FFmpeg is pre-installed on HF Spaces)
-# No pip package needed — uses system ffmpeg
+# PyTorch (CPU for free tier)
+torch
+torchaudio
 
 # Text-to-Speech
 edge-tts
-
-# Resemble Enhance (optional — SOTA denoising + super-resolution)
-resemble-enhance
