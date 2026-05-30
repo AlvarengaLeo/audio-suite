@@ -40,10 +40,15 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # in their own venv and call it via subprocess. We do NOT use MeloTTS — the base
 # voice comes from the main app's Kokoro; OpenVoice only transfers the timbre.
 # Non-fatal: if this venv fails to build, the rest of the app keeps working.
+# OpenVoice pins faster-whisper==0.9.0 -> av==10 (PyAV), which does NOT build on
+# the trixie base (ffmpeg 7). So we install OpenVoice with --no-deps and supply
+# a MODERN, wheel-based dependency set (modern faster-whisper ships an av wheel).
 RUN python -m venv /home/user/clone-venv && \
     /home/user/clone-venv/bin/pip install --no-cache-dir \
         torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
     /home/user/clone-venv/bin/pip install --no-cache-dir \
+        numpy soundfile librosa wavmark faster-whisper huggingface_hub && \
+    /home/user/clone-venv/bin/pip install --no-cache-dir --no-deps \
         git+https://github.com/myshell-ai/OpenVoice.git && \
     echo "clone-venv ready." || echo "clone-venv build failed (cloning will be disabled)."
 
