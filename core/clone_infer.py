@@ -22,7 +22,6 @@ def main():
 
     import torch  # noqa: F401  (ensures torch is importable in the venv)
     from huggingface_hub import snapshot_download
-    from openvoice import se_extractor
     from openvoice.api import ToneColorConverter
 
     ckpt = snapshot_download("myshell-ai/OpenVoiceV2")
@@ -33,9 +32,15 @@ def main():
     )
     converter.load_ckpt(os.path.join(conv_dir, "checkpoint.pth"))
 
-    # Speaker embeddings: source (base voice) and target (reference).
-    src_se, _ = se_extractor.get_se(base_wav, converter, vad=True)
-    tgt_se, _ = se_extractor.get_se(ref_wav, converter, vad=True)
+    # Speaker embeddings computed DIRECTLY from each clip (no VAD/whisper — the
+    # reference is already a clean single-speaker clip, so se_extractor's
+    # silero/whisper segmentation is unnecessary and fragile).
+    def _se(path):
+        se = converter.extract_se([path])
+        return se[0] if isinstance(se, (list, tuple)) else se
+
+    src_se = _se(base_wav)   # base (Kokoro) speaker
+    tgt_se = _se(ref_wav)    # target (reference) speaker
 
     # Transfer the reference timbre onto the base audio.
     converter.convert(
