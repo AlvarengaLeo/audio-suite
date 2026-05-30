@@ -20,4 +20,8 @@ edge-tts>=6.1            # Engine 1: Edge Neural (free, online)
 kokoro>=0.9.4            # Engine 2: Kokoro HD 82M (local, Apache-2.0)
 misaki[en]>=0.9          # English G2P; ES/IT/FR/PT Kokoro voices use the espeak-ng fallback
 openai>=1.40.0           # Engine 3: OpenAI Studio gpt-4o-mini-tts (premium, optional)
-num2words>=0.5.14        # Spanish text normalization (numbers -> words)
+num2words>=0.5.12        # Spanish text normalization (loosened: MeloTTS pins 0.5.12)
+
+# Voice cloning (CPU): OpenVoice V2 + MeloTTS are installed from git in the
+# Dockerfile (after this file) so pip resolves their version-sensitive deps
+# last. See core/voice_clone.py.

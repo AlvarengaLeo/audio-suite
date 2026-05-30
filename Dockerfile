@@ -30,15 +30,26 @@ RUN pip install --no-cache-dir --user \
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
+# --- Voice cloning (CPU): OpenVoice V2 + MeloTTS ---
+# Installed last so pip resolves their version-sensitive deps after the rest.
+# This is the most conflict-prone layer; pin versions here while iterating on
+# the HF build if the resolver complains.
+RUN pip install --no-cache-dir --user \
+        git+https://github.com/myshell-ai/MeloTTS.git \
+        git+https://github.com/myshell-ai/OpenVoice.git \
+        faster-whisper \
+    && python -m unidic download || echo "MeloTTS/OpenVoice install needs version pinning (iterate on build)."
+
 # Copy app code (owned by the runtime user) and create writable output dir
 COPY --chown=user . .
 RUN mkdir -p outputs
 
-# Pre-download the Kokoro model so the first user request is fast.
-# Non-fatal: if the download fails at build time it retries at runtime
-# (the cache is user-owned, so runtime downloads also succeed).
+# Pre-download models so the first user request is fast (all non-fatal:
+# they re-download at runtime into the user-owned HF cache if skipped).
 RUN python -c "from kokoro import KPipeline; KPipeline(lang_code='e'); KPipeline(lang_code='a')" || \
     echo "Kokoro pre-warm skipped (will download on first use)."
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('myshell-ai/OpenVoiceV2')" || \
+    echo "OpenVoice V2 checkpoints will download on first use."
 
 # HF Spaces expects port 7860
 EXPOSE 7860

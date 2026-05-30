@@ -41,6 +41,7 @@ from core.tts import (
     SPEED_PRESETS, PITCH_PRESETS, OPENAI_STYLE_PRESETS,
     ENGINE_EDGE, ENGINE_OPENAI,
 )
+from core.voice_clone import clone_voice, is_clone_available
 
 OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "outputs")
 
@@ -230,6 +231,48 @@ def handle_tts(text_input, engine, voice_name, speed,
 
     except Exception as e:
         logger.exception("TTS failed")
+        raise gr.Error(_friendly_error(e))
+
+
+def handle_clone(reference, text, consent, master, progress=gr.Progress()):
+    """Voice-cloning handler (OpenVoice V2, runs on CPU)."""
+    if not consent:
+        gr.Warning("Debes confirmar que tienes permiso para clonar esta voz.")
+        return None, None
+    if reference is None:
+        gr.Warning("Sube un audio de referencia (30-60s de voz limpia).")
+        return None, None
+    if not text or not text.strip():
+        gr.Warning("Escribe el texto que dirá la voz clonada.")
+        return None, None
+    if not is_clone_available():
+        raise gr.Error(
+            "El motor de clonación todavía no está disponible en este entorno "
+            "(OpenVoice V2 se instala en el Space)."
+        )
+    try:
+        progress(0.3, desc="Analizando y clonando la voz (CPU, ~15-40s)...")
+        output = clone_voice(reference, text)
+
+        if master:
+            try:
+                from core.postprocessor import finalize_voice
+                output = finalize_voice(output)
+            except Exception as e:
+                logger.warning(f"finalize skipped: {e}")
+
+        os.makedirs(OUTPUTS_DIR, exist_ok=True)
+        prune_outputs()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ext = os.path.splitext(output)[1] or ".wav"
+        final = os.path.join(OUTPUTS_DIR, f"voz_clonada_{ts}{ext}")
+        shutil.copy2(output, final)
+
+        progress(1.0, desc="¡Voz clonada!")
+        return final, final
+
+    except Exception as e:
+        logger.exception("Voice clone failed")
         raise gr.Error(_friendly_error(e))
 
 
@@ -1003,6 +1046,92 @@ def build_ui():
                         </div>
                     </div>
                 """)
+
+            # ════════════════════════════════════════════
+            #  TAB 4 — CLONAR VOZ (ZeroGPU)
+            # ════════════════════════════════════════════
+            with gr.Tab("Clonar Voz"):
+                gr.HTML("""
+                    <div class="section-hero">
+                        <h2 class="section-title">
+                            Clona una voz con
+                            <span class="section-italic">Fidelidad de Alto Nivel.</span>
+                        </h2>
+                        <p class="section-desc">
+                            Sube una grabación y genera nueva voz que suena
+                            <strong>claramente como esa persona</strong>, con
+                            <strong>OpenVoice V2</strong> — 100% local en CPU, gratis.
+                            <br><span style="font-size:0.85rem;color:#8C8C9A;">
+                            Cuanta más referencia limpia (30–60s), mayor similitud.
+                            Logra <strong>alta similitud</strong>, no una copia idéntica.
+                            Corre en CPU: cada clonación puede tardar ~15–40s.</span>
+                        </p>
+                    </div>
+                """)
+
+                if not is_clone_available():
+                    gr.Markdown(
+                        "> ⚠️ El motor de clonación (OpenVoice V2) todavía no está "
+                        "disponible en este entorno; se instala en el Space."
+                    )
+
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        clone_ref = gr.Audio(
+                            label="Voz de referencia (30–60s limpios)",
+                            sources=["upload", "microphone"],
+                            type="filepath",
+                            elem_id="clone-ref",
+                        )
+                        gr.Markdown(
+                            "*Sube voz clara, mono, sin música ni ruido. "
+                            "Más referencia limpia = mayor parecido.*"
+                        )
+                        clone_text = gr.Textbox(
+                            label="Texto a decir con esa voz",
+                            placeholder="Escribe lo que dirá la voz clonada...",
+                            lines=5,
+                            max_lines=12,
+                            elem_id="clone-text",
+                        )
+                        clone_master = gr.Checkbox(
+                            label="Masterizar audio (más nítido y parejo)",
+                            value=True,
+                            elem_id="clone-master",
+                        )
+                        clone_consent = gr.Checkbox(
+                            label="Confirmo que es mi propia voz o que tengo permiso "
+                                  "explícito del titular para clonarla.",
+                            value=False,
+                            info="Clonar la voz de un tercero sin permiso es ilegal en "
+                                 "muchos países. Obligatorio.",
+                            elem_id="clone-consent",
+                        )
+
+                    with gr.Column(scale=1):
+                        clone_output = gr.Audio(
+                            label="Voz Clonada",
+                            type="filepath",
+                            interactive=False,
+                            elem_id="clone-output",
+                        )
+                        clone_download = gr.File(
+                            label="Descargar voz clonada",
+                            elem_id="clone-download",
+                        )
+
+                with gr.Column(elem_classes="centered-action"):
+                    clone_btn = gr.Button(
+                        "Clonar y Generar",
+                        variant="primary",
+                        size="lg",
+                    )
+
+                clone_btn.click(
+                    fn=handle_clone,
+                    inputs=[clone_ref, clone_text, clone_consent, clone_master],
+                    outputs=[clone_output, clone_download],
+                )
 
         # ── Footer ──
         gr.HTML("""
