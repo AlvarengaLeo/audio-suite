@@ -3,11 +3,15 @@ FROM python:3.11-slim
 # System dependencies
 #  - ffmpeg / libsndfile1-dev : audio I/O
 #  - espeak-ng                : phonemizer required by Kokoro TTS (incl. Spanish)
+#  - pkg-config + libav*-dev   : needed to build PyAV (OpenVoice -> faster-whisper)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1-dev \
     espeak-ng \
     build-essential \
+    pkg-config \
+    libavformat-dev libavcodec-dev libavdevice-dev libavutil-dev \
+    libavfilter-dev libswscale-dev libswresample-dev \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,15 +34,18 @@ RUN pip install --no-cache-dir --user \
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# --- Voice cloning (CPU): OpenVoice V2 + MeloTTS ---
-# Installed last so pip resolves their version-sensitive deps after the rest.
-# This is the most conflict-prone layer; pin versions here while iterating on
-# the HF build if the resolver complains.
-RUN pip install --no-cache-dir --user \
-        git+https://github.com/myshell-ai/MeloTTS.git \
-        git+https://github.com/myshell-ai/OpenVoice.git \
-        faster-whisper \
-    && python -m unidic download || echo "MeloTTS/OpenVoice install needs version pinning (iterate on build)."
+# --- Voice cloning (CPU): OpenVoice ToneColorConverter in an ISOLATED venv ---
+# OpenVoice/MeloTTS pin ancient deps (gradio 3.48, transformers 4.27, numpy 1.22)
+# that would BREAK the main Gradio-6 app if installed in-place. We isolate them
+# in their own venv and call it via subprocess. We do NOT use MeloTTS — the base
+# voice comes from the main app's Kokoro; OpenVoice only transfers the timbre.
+# Non-fatal: if this venv fails to build, the rest of the app keeps working.
+RUN python -m venv /home/user/clone-venv && \
+    /home/user/clone-venv/bin/pip install --no-cache-dir \
+        torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+    /home/user/clone-venv/bin/pip install --no-cache-dir \
+        git+https://github.com/myshell-ai/OpenVoice.git && \
+    echo "clone-venv ready." || echo "clone-venv build failed (cloning will be disabled)."
 
 # Copy app code (owned by the runtime user) and create writable output dir
 COPY --chown=user . .
