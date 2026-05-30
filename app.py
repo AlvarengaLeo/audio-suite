@@ -593,6 +593,123 @@ def build_ui():
         letter-spacing: 0.1em;
     }
 
+    /* ════════════════════════════════════════════════════════════════
+       CONTRAST SAFETY NET — guarantees no black-on-black text (WCAG AA)
+       Palette: bg #0D0D12 · surface #16161F · surface-2 #1E1E2A
+                text #F5F3EF · text-2 #A9A9B8 · accent #C9A84C / #E0C068
+       ════════════════════════════════════════════════════════════════ */
+    .gradio-container input,
+    .gradio-container textarea,
+    .gradio-container select,
+    .gradio-container [contenteditable="true"] {
+        color: #F5F3EF !important;
+        background-color: #16161F !important;
+    }
+    .gradio-container input::placeholder,
+    .gradio-container textarea::placeholder { color: #7E7E8C !important; }
+
+    /* Dropdown popup list (a very common black-on-black offender) */
+    .gradio-container ul.options,
+    .gradio-container .options {
+        background: #16161F !important;
+        border: 1px solid rgba(201,168,76,0.25) !important;
+    }
+    .gradio-container ul.options li,
+    .gradio-container .options .item { color: #F5F3EF !important; }
+    .gradio-container .options .item:hover,
+    .gradio-container .options .item.active,
+    .gradio-container .options li.selected {
+        background: #2A2A3A !important; color: #FFFFFF !important;
+    }
+
+    /* Labels / info / markdown */
+    .gradio-container label,
+    .gradio-container .label-wrap span { color: #CFCFDA !important; }
+    .gradio-container .prose,
+    .gradio-container .md,
+    .gradio-container .markdown { color: #E8E6E1 !important; }
+    .gradio-container .prose code { color: #E0C068 !important; background: rgba(201,168,76,0.10); }
+
+    /* gr.Examples table */
+    .gradio-container .examples table,
+    .gradio-container .examples td,
+    .gradio-container [class*="example"] td { color: #F5F3EF !important; }
+
+    /* Visible focus ring for keyboard a11y */
+    .gradio-container input:focus,
+    .gradio-container textarea:focus,
+    .gradio-container button:focus-visible,
+    .gradio-container [tabindex]:focus-visible {
+        outline: 2px solid rgba(201,168,76,0.6) !important;
+        outline-offset: 2px;
+    }
+
+    /* ── "How to use" step strip (per-tab, easy to digest) ── */
+    .how-to {
+        display: flex; gap: 0.75rem; flex-wrap: wrap; justify-content: center;
+        max-width: 860px; margin: 0 auto 2rem;
+    }
+    .how-step {
+        display: flex; align-items: center; gap: 0.7rem; flex: 1; min-width: 210px;
+        background: linear-gradient(180deg, rgba(201,168,76,0.05), rgba(255,255,255,0.01));
+        border: 1px solid rgba(201,168,76,0.14);
+        border-radius: 0.9rem; padding: 0.8rem 1rem;
+        transition: border-color 0.25s ease, transform 0.25s ease;
+    }
+    .how-step:hover { border-color: rgba(201,168,76,0.35); transform: translateY(-2px); }
+    .how-step .n {
+        width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%;
+        background: rgba(201,168,76,0.16); color: #E0C068;
+        display: flex; align-items: center; justify-content: center;
+        font-family: "JetBrains Mono", monospace; font-size: 0.8rem; font-weight: 600;
+    }
+    .how-step .t { font-size: 0.86rem; color: #C9C9D6; line-height: 1.4; }
+    .how-step .t b { color: #F5F3EF; font-weight: 600; }
+    @media (max-width: 768px) { .how-to { flex-direction: column; } }
+
+    /* ════════════ Ambient polish (lightweight, GPU transform/opacity) ════════════ */
+    .gradio-container { position: relative; z-index: 1; }
+
+    /* Aurora glow — dark luxe ambient light behind the content */
+    .aurora {
+        position: fixed; top: -15%; left: -10%; right: -10%; height: 65vh;
+        z-index: 0; pointer-events: none; filter: blur(70px); opacity: 0.55;
+        background:
+          radial-gradient(40% 60% at 18% 28%, rgba(201,168,76,0.20), transparent 70%),
+          radial-gradient(35% 55% at 82% 18%, rgba(224,192,104,0.14), transparent 70%),
+          radial-gradient(34% 52% at 55% 85%, rgba(110,86,190,0.12), transparent 70%);
+        animation: aurora-drift 20s ease-in-out infinite alternate;
+        will-change: transform;
+    }
+    @keyframes aurora-drift {
+        0%   { transform: translate3d(-3%, -2%, 0) scale(1); }
+        100% { transform: translate3d(3%, 3%, 0) scale(1.08); }
+    }
+
+    /* Glassmorphism feel on cards */
+    .how-step, .pipeline-step {
+        backdrop-filter: blur(8px) saturate(120%);
+        -webkit-backdrop-filter: blur(8px) saturate(120%);
+    }
+    .pipeline-step:hover { box-shadow: 0 12px 30px rgba(0,0,0,0.45); }
+
+    /* CSS audio-waveform accent (no JS) */
+    .wave { display:inline-flex; align-items:flex-end; gap:3px; height:18px; vertical-align:middle; }
+    .wave span {
+        width:3px; height:6px; border-radius:2px;
+        background:linear-gradient(180deg,#E0C068,#C9A84C);
+        animation: wavebar 1.1s ease-in-out infinite;
+    }
+    .wave span:nth-child(2){animation-delay:.15s} .wave span:nth-child(3){animation-delay:.30s}
+    .wave span:nth-child(4){animation-delay:.45s} .wave span:nth-child(5){animation-delay:.60s}
+    @keyframes wavebar { 0%,100%{height:5px;opacity:.55} 50%{height:18px;opacity:1} }
+
+    @media (prefers-reduced-motion: reduce) {
+        .aurora { animation: none; }
+        .wave span { animation: none; height: 11px; }
+        .pulse-dot { animation: none; }
+    }
+
     footer { display: none !important; }
     """
 
@@ -628,12 +745,29 @@ def build_ui():
         button_primary_background_fill_dark="#C9A84C",
         button_primary_text_color="#0D0D12",
         button_primary_text_color_dark="#0D0D12",
-        block_background_fill="#101015",
-        block_background_fill_dark="#101015",
+        block_background_fill="#14141C",
+        block_background_fill_dark="#14141C",
         block_border_color="rgba(250,248,245,0.1)",
         block_border_color_dark="rgba(250,248,245,0.1)",
         panel_background_fill="#0D0D12",
         panel_background_fill_dark="#0D0D12",
+        # --- Inputs & labels: fix black-on-black, ensure WCAG AA contrast ---
+        input_background_fill="#16161F",
+        input_background_fill_dark="#16161F",
+        input_background_fill_focus="#1E1E2A",
+        input_background_fill_focus_dark="#1E1E2A",
+        input_border_color="rgba(250,248,245,0.14)",
+        input_border_color_dark="rgba(250,248,245,0.14)",
+        input_border_color_focus="#C9A84C",
+        input_border_color_focus_dark="#C9A84C",
+        block_label_text_color="#CFCFDA",
+        block_label_text_color_dark="#CFCFDA",
+        block_title_text_color="#F5F3EF",
+        block_title_text_color_dark="#F5F3EF",
+        body_text_color_subdued="#A9A9B8",
+        body_text_color_subdued_dark="#A9A9B8",
+        block_info_text_color="#A9A9B8",
+        block_info_text_color_dark="#A9A9B8",
     )
 
     # ------------------------------------------------------------------
@@ -642,13 +776,16 @@ def build_ui():
     with gr.Blocks(title="Majes de Sivar — Audio Suite") as app:
 
         # Noise overlay
-        gr.HTML('<div class="noise-bg"></div>')
+        gr.HTML('<div class="aurora"></div><div class="noise-bg"></div>')
 
         # ── Card frame start ──
         # Header with brand + status (dot color reflects real availability)
         gr.HTML(f"""
             <div class="suite-header">
-                <span class="suite-brand">Majes de Sivar</span>
+                <span class="suite-brand">
+                    <span class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                    &nbsp;Majes de Sivar
+                </span>
                 <span class="suite-status" role="status" aria-label="Estado: {status_text}">
                     <span class="pulse-dot" style="background:{status_color};box-shadow:0 0 8px {status_color};"></span>
                     {status_text}
@@ -676,6 +813,14 @@ def build_ui():
                             Procesamiento <strong>100% local</strong> — cero latencia,
                             máxima privacidad, control milimétrico sin destruir tu voz.
                         </p>
+                    </div>
+                """)
+
+                gr.HTML("""
+                    <div class="how-to">
+                        <div class="how-step"><span class="n">1</span><span class="t"><b>Sube tu audio</b> de voz (WAV, MP3, M4A…).</span></div>
+                        <div class="how-step"><span class="n">2</span><span class="t">Opcional: ajusta <b>intensidad</b> y <b>preset</b> en Configuración avanzada.</span></div>
+                        <div class="how-step"><span class="n">3</span><span class="t">Pulsa <b>Mejorar Audio</b>, compara antes/después y descarga.</span></div>
                     </div>
                 """)
 
@@ -801,6 +946,14 @@ def build_ui():
                     </div>
                 """)
 
+                gr.HTML("""
+                    <div class="how-to">
+                        <div class="how-step"><span class="n">1</span><span class="t"><b>Sube un video</b> (MP4, MKV, MOV… máx. 500 MB / 30 min).</span></div>
+                        <div class="how-step"><span class="n">2</span><span class="t">Elige el <b>formato</b>: WAV/FLAC (sin pérdida) o MP3 (ligero).</span></div>
+                        <div class="how-step"><span class="n">3</span><span class="t">Pulsa <b>Extraer Audio</b> y descarga la pista.</span></div>
+                    </div>
+                """)
+
                 with gr.Row():
                     with gr.Column(scale=1):
                         ext_input = gr.File(
@@ -893,6 +1046,14 @@ def build_ui():
                             <br><span style="font-size:0.85rem;color:#8C8C9A;">Nota: Kokoro
                             es 100% local; Edge y OpenAI envían el texto a sus servidores.</span>
                         </p>
+                    </div>
+                """)
+
+                gr.HTML("""
+                    <div class="how-to">
+                        <div class="how-step"><span class="n">1</span><span class="t"><b>Escribe el texto</b> (o usa un ejemplo de abajo).</span></div>
+                        <div class="how-step"><span class="n">2</span><span class="t">Elige <b>motor</b> y <b>voz</b>; ajusta velocidad/tono o emoción.</span></div>
+                        <div class="how-step"><span class="n">3</span><span class="t">Pulsa <b>Generar Voz</b> y descarga el audio.</span></div>
                     </div>
                 """)
 
@@ -1066,6 +1227,14 @@ def build_ui():
                             Logra <strong>alta similitud</strong>, no una copia idéntica.
                             Corre en CPU: cada clonación puede tardar ~15–40s.</span>
                         </p>
+                    </div>
+                """)
+
+                gr.HTML("""
+                    <div class="how-to">
+                        <div class="how-step"><span class="n">1</span><span class="t"><b>Sube 30–60s</b> de la voz a clonar (limpia, sin música).</span></div>
+                        <div class="how-step"><span class="n">2</span><span class="t">Escribe el <b>texto</b> y marca el <b>consentimiento</b>.</span></div>
+                        <div class="how-step"><span class="n">3</span><span class="t">Pulsa <b>Clonar y Generar</b> (alta similitud, no idéntica).</span></div>
                     </div>
                 """)
 
