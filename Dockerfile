@@ -47,7 +47,9 @@ RUN python -m venv /home/user/clone-venv && \
     /home/user/clone-venv/bin/pip install --no-cache-dir \
         torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
     /home/user/clone-venv/bin/pip install --no-cache-dir \
-        numpy soundfile librosa wavmark faster-whisper huggingface_hub && \
+        numpy soundfile librosa wavmark faster-whisper huggingface_hub \
+        pydub whisper-timestamped inflect unidecode eng_to_ipa \
+        pypinyin cn2an jieba langid && \
     /home/user/clone-venv/bin/pip install --no-cache-dir --no-deps \
         git+https://github.com/myshell-ai/OpenVoice.git && \
     echo "clone-venv ready." || echo "clone-venv build failed (cloning will be disabled)."
