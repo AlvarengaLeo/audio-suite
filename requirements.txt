@@ -1,16 +1,23 @@
+# NOTE: lower bounds (>=) keep builds from pulling ancient versions. For a fully
+# reproducible image, pin exact versions from a `pip freeze` of a known-good build.
+
 # Core
 gradio>=6.0.0
-numpy
-soundfile
+numpy>=1.24
+soundfile>=0.12
 
-# PyTorch CPU
-torch
-torchaudio
+# PyTorch (CPU-only) is installed separately in the Dockerfile via the
+# https://download.pytorch.org/whl/cpu index to avoid pulling ~2 GB of unused
+# CUDA wheels. deepfilternet/torchaudio resolve against that pre-installed build.
 
 # Audio Enhancement
-deepfilternet
-pedalboard
-pydub
+deepfilternet>=0.5
+pedalboard>=0.9
+pydub>=0.25
 
-# Text-to-Speech
-edge-tts
+# Text-to-Speech engines
+edge-tts>=6.1            # Engine 1: Edge Neural (free, online)
+kokoro>=0.9.4            # Engine 2: Kokoro HD 82M (local, Apache-2.0)
+misaki[en]>=0.9          # English G2P; ES/IT/FR/PT Kokoro voices use the espeak-ng fallback
+openai>=1.40.0           # Engine 3: OpenAI Studio gpt-4o-mini-tts (premium, optional)
+num2words>=0.5.14        # Spanish text normalization (numbers -> words)

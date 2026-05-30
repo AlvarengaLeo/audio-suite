@@ -35,8 +35,8 @@ def convert_to_working_format(input_path: str) -> str:
 
     if ext not in supported_extensions:
         raise ValueError(
-            f"Unsupported file format: '{ext}'. "
-            f"Supported formats: {', '.join(sorted(supported_extensions))}"
+            f"Formato de archivo no soportado: '{ext}'. "
+            f"Formatos válidos: {', '.join(sorted(supported_extensions))}"
         )
 
     try:

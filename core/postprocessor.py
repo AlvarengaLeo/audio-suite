@@ -241,3 +241,98 @@ def _ffmpeg_fallback_postprocessing(input_wav_path: str,
         )
     except Exception as e:
         raise RuntimeError(f"FFmpeg postprocessing failed: {e}") from e
+
+
+# ===================================================================
+# TTS FINALIZATION — clean entrances/exits + consistent loudness
+# ===================================================================
+def _parse_loudnorm_json(stderr: str):
+    """Extract the JSON block ffmpeg's loudnorm prints to stderr."""
+    import json
+    try:
+        block = stderr[stderr.rindex("{"): stderr.rindex("}") + 1]
+        return json.loads(block)
+    except Exception:
+        return None
+
+
+def finalize_voice(input_path: str, lufs: float = -16.0,
+                   trim_silence: bool = True) -> str:
+    """
+    Polish a generated TTS clip so it sounds more "produced": trim leading/
+    trailing silence, add tiny fades to kill clicks, and normalize loudness to
+    a consistent target (two-pass ffmpeg loudnorm — NOT single-pass, which
+    pumps short clips). Accepts mp3 (Edge/OpenAI) or wav (Kokoro) input and
+    returns an mp3 path.
+
+    This is intentionally gentle (no compression/makeup gain) to avoid making
+    an already-clean synthetic voice sound over-processed. On ANY failure it
+    returns the original path unchanged, so it can never break synthesis.
+    """
+    import subprocess
+    import tempfile
+
+    try:
+        # --- Pass 1: measure integrated loudness ---
+        p1 = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-y", "-i", input_path,
+             "-af", f"loudnorm=I={lufs}:TP=-1.5:LRA=11:print_format=json",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=300,
+        )
+        stats = _parse_loudnorm_json(p1.stderr)
+
+        out = tempfile.NamedTemporaryFile(
+            suffix="_final.mp3", delete=False, dir=tempfile.gettempdir()
+        )
+        out_path = out.name
+        out.close()
+
+        # --- Build the pass-2 filter chain ---
+        chain = []
+        if trim_silence:
+            # Trim + fade the start, reverse, trim + fade the (now-start) end,
+            # reverse back. Doing both ends via one areverse pair is robust and
+            # needs no clip-length lookup.
+            trim = ("silenceremove=start_periods=1:start_silence=0.04:"
+                    "start_threshold=-50dB:detection=peak")
+            fade_in = "afade=t=in:st=0:d=0.015"
+            chain += [trim, fade_in, "areverse", trim, fade_in, "areverse"]
+
+        if stats and all(k in stats for k in
+                         ("input_i", "input_tp", "input_lra",
+                          "input_thresh", "target_offset")):
+            chain.append(
+                f"loudnorm=I={lufs}:TP=-1.5:LRA=11"
+                f":measured_I={stats['input_i']}"
+                f":measured_TP={stats['input_tp']}"
+                f":measured_LRA={stats['input_lra']}"
+                f":measured_thresh={stats['input_thresh']}"
+                f":offset={stats['target_offset']}:linear=true"
+            )
+        else:
+            # Fallback: dynamic single-pass (still better than nothing).
+            chain.append(f"loudnorm=I={lufs}:TP=-1.5:LRA=11")
+
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-y", "-i", input_path,
+             "-af", ",".join(chain),
+             "-ar", "48000", "-ac", "1", "-b:a", "192k", out_path],
+            capture_output=True, text=True, timeout=300,
+        )
+        if (r.returncode != 0 or not os.path.exists(out_path)
+                or os.path.getsize(out_path) == 0):
+            logger.warning(
+                f"finalize_voice: ffmpeg rc={r.returncode}; using raw output."
+            )
+            return input_path
+
+        logger.info(f"finalize_voice complete: {out_path}")
+        return out_path
+
+    except FileNotFoundError:
+        logger.warning("finalize_voice: ffmpeg not found; using raw output.")
+        return input_path
+    except Exception as e:
+        logger.warning(f"finalize_voice error: {e}; using raw output.")
+        return input_path

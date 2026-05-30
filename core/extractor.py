@@ -28,13 +28,13 @@ def extract_audio(video_path: str, output_format: str = "wav") -> str:
         Path to the extracted audio file.
     """
     if not video_path or not os.path.isfile(video_path):
-        raise ValueError("No valid video file provided.")
+        raise ValueError("No se proporcionó un archivo de video válido.")
 
     ext = os.path.splitext(video_path)[1].lower()
     if ext not in VIDEO_FORMATS:
         raise ValueError(
-            f"Unsupported video format: {ext}. "
-            f"Supported: {', '.join(sorted(VIDEO_FORMATS))}"
+            f"Formato de video no soportado: {ext}. "
+            f"Válidos: {', '.join(sorted(VIDEO_FORMATS))}"
         )
 
     # Create output file
@@ -112,11 +112,14 @@ def get_video_info(video_path: str) -> dict:
             import json
             data = json.loads(result.stdout)
             fmt = data.get("format", {})
+            streams = data.get("streams", [])
+            has_audio = any(s.get("codec_type") == "audio" for s in streams)
             return {
                 "duration": float(fmt.get("duration", 0)),
                 "size_mb": int(fmt.get("size", 0)) / (1024 * 1024),
                 "format": fmt.get("format_long_name", "Unknown"),
+                "has_audio": has_audio,
             }
     except Exception:
         pass
-    return {"duration": 0, "size_mb": 0, "format": "Unknown"}
+    return {"duration": 0, "size_mb": 0, "format": "Unknown", "has_audio": True}

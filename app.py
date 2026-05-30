@@ -11,6 +11,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import shutil
 import logging
@@ -34,9 +35,61 @@ sys.path.insert(0, os.path.dirname(__file__))
 from core.pipeline import run_pipeline
 from core.enhancer import is_model_available, is_resemble_available
 from core.extractor import extract_audio, get_video_info, VIDEO_FORMATS
-from core.tts import synthesize_speech, VOICE_CATALOG, SPEED_PRESETS
+from core.tts import (
+    synthesize_speech, available_engines, get_voices,
+    engine_char_limit, openai_budget_remaining,
+    SPEED_PRESETS, PITCH_PRESETS, OPENAI_STYLE_PRESETS,
+    ENGINE_EDGE, ENGINE_OPENAI,
+)
 
 OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "outputs")
+
+# Cap outputs/ so a public Space's disk never fills up: by file count AND by
+# total bytes (one big WAV extraction can dwarf hundreds of TTS mp3s).
+MAX_OUTPUT_FILES = 60
+MAX_OUTPUT_BYTES = 500 * 1024 * 1024  # ~500 MB
+
+
+def prune_outputs(max_files: int = MAX_OUTPUT_FILES,
+                  max_bytes: int = MAX_OUTPUT_BYTES):
+    """Delete oldest files until outputs/ is under both the count and byte cap."""
+    try:
+        if not os.path.isdir(OUTPUTS_DIR):
+            return
+        files = [
+            os.path.join(OUTPUTS_DIR, f) for f in os.listdir(OUTPUTS_DIR)
+            if os.path.isfile(os.path.join(OUTPUTS_DIR, f))
+        ]
+        files.sort(key=lambda p: os.path.getmtime(p))  # oldest first
+        total = sum(os.path.getsize(p) for p in files)
+        while files and (len(files) > max_files or total > max_bytes):
+            old = files.pop(0)
+            try:
+                total -= os.path.getsize(old)
+                os.remove(old)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _slug(name: str, fallback: str = "audio", maxlen: int = 40) -> str:
+    """Clean a filename base: strip accents, keep [a-z0-9-_], collapse repeats."""
+    import unicodedata
+    name = unicodedata.normalize("NFKD", name or "")
+    name = name.encode("ascii", "ignore").decode("ascii").lower()
+    name = re.sub(r"[^a-z0-9]+", "_", name).strip("_")
+    name = re.sub(r"_{2,}", "_", name)[:maxlen].strip("_")
+    return name or fallback
+
+
+def _friendly_error(e: Exception) -> str:
+    """User-facing message: pass through our (Spanish) ValueErrors, otherwise
+    a generic Spanish message so raw tracebacks/ffmpeg stderr never leak."""
+    if isinstance(e, ValueError):
+        return str(e)
+    return ("Ocurrió un error al procesar el archivo. Verifica que el formato "
+            "sea válido e inténtalo de nuevo.")
 
 
 # ===================================================================
@@ -51,6 +104,8 @@ def handle_enhance(audio_input, ai_engine, enhancement_strength,
         return None, None
 
     try:
+        prune_outputs()
+
         def cb(v, m):
             progress(v, desc=m)
 
@@ -65,54 +120,109 @@ def handle_enhance(audio_input, ai_engine, enhancement_strength,
 
     except Exception as e:
         logger.exception("Enhancement failed")
-        gr.Error(str(e))
-        return None, None
+        raise gr.Error(_friendly_error(e))
+
+
+def _format_video_info(info: dict) -> str:
+    """Build a short Spanish summary line from get_video_info()."""
+    try:
+        secs = int(info.get("duration", 0) or 0)
+        dur = f"{secs // 60}:{secs % 60:02d}" if secs else "—"
+        size = info.get("size_mb", 0) or 0
+        fmt = info.get("format", "Desconocido")
+        return f"**Duración:** {dur}  ·  **Tamaño:** {size:.1f} MB  ·  **Formato:** {fmt}"
+    except Exception:
+        return ""
 
 
 def handle_extract(video_input, out_format, progress=gr.Progress()):
     """Audio Extract handler."""
     if video_input is None:
         gr.Warning("Sube un archivo de video primero.")
-        return None, None
+        return None, None, ""
 
     try:
         progress(0.2, desc="Analizando video...")
         info = get_video_info(video_input)
         logger.info(f"Video info: {info}")
 
-        progress(0.4, desc=f"Extrayendo audio ({out_format.upper()})...")
+        # --- Guards (protect the free CPU tier before invoking ffmpeg) ---
+        size_mb = os.path.getsize(video_input) / (1024 * 1024)
+        if size_mb > 500:
+            raise ValueError(
+                f"El video es demasiado grande ({size_mb:.0f} MB). "
+                f"El máximo es 500 MB."
+            )
+        if info.get("duration", 0) > 1800:  # 30 min
+            raise ValueError(
+                "El video supera el límite de 30 minutos del plan gratuito. "
+                "Recorta o sube un clip más corto."
+            )
+        if not info.get("has_audio", True):
+            raise ValueError("El video no contiene una pista de audio.")
+
+        progress(0.4, desc=f"Extrayendo audio en {out_format.upper()} "
+                           f"(puede tardar en videos largos)...")
         extracted = extract_audio(video_input, output_format=out_format)
 
-        # Copy to outputs/
-        os.makedirs(OUTPUTS_DIR, exist_ok=True)
-        base = os.path.splitext(os.path.basename(video_input))[0]
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        final = os.path.join(OUTPUTS_DIR, f"{base}_extracted_{ts}.{out_format}")
-        shutil.copy2(extracted, final)
+        try:
+            # Copy to outputs/ with a sanitized, clean filename.
+            os.makedirs(OUTPUTS_DIR, exist_ok=True)
+            prune_outputs()
+            base = _slug(os.path.splitext(os.path.basename(video_input))[0])
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            final = os.path.join(OUTPUTS_DIR, f"{base}_extracted_{ts}.{out_format}")
+            shutil.copy2(extracted, final)
+        finally:
+            # Don't leak the intermediate temp file into /tmp on every run.
+            try:
+                if os.path.exists(extracted):
+                    os.remove(extracted)
+            except OSError:
+                pass
 
         progress(1.0, desc="Extraccion completada!")
-        return final, final
+        return final, final, _format_video_info(info)
 
     except Exception as e:
         logger.exception("Extraction failed")
-        gr.Error(str(e))
-        return None, None
+        raise gr.Error(_friendly_error(e))
 
 
-def handle_tts(text_input, voice_name, speed, progress=gr.Progress()):
-    """Text-to-Audio handler."""
+def handle_tts(text_input, engine, voice_name, speed,
+               style_preset, custom_instructions, pitch_preset, master,
+               progress=gr.Progress()):
+    """Text-to-Audio handler (multi-engine)."""
     if not text_input or not text_input.strip():
         gr.Warning("Escribe algun texto para sintetizar.")
         return None, None
 
     try:
-        progress(0.3, desc="Generando voz con IA neural...")
-        output = synthesize_speech(text_input, voice_name, speed)
+        progress(0.3, desc=f"Generando voz con {engine}...")
+        output, used_engine = synthesize_speech(
+            text_input,
+            engine=engine,
+            voice_name=voice_name,
+            speed=speed,
+            style_preset=style_preset,
+            custom_instructions=custom_instructions,
+            pitch_preset=pitch_preset,
+            master=master,
+        )
 
-        # Copy to outputs/
+        # Tell the user if their chosen engine wasn't available and we fell back.
+        if used_engine != engine:
+            gr.Warning(
+                f"El motor '{engine}' no estaba disponible; se usó "
+                f"'{used_engine}'."
+            )
+
+        # Copy to outputs/, preserving the real extension (.wav for Kokoro).
         os.makedirs(OUTPUTS_DIR, exist_ok=True)
+        prune_outputs()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        final = os.path.join(OUTPUTS_DIR, f"tts_output_{ts}.mp3")
+        ext = os.path.splitext(output)[1] or ".mp3"
+        final = os.path.join(OUTPUTS_DIR, f"tts_output_{ts}{ext}")
         shutil.copy2(output, final)
 
         progress(1.0, desc="Voz generada!")
@@ -120,8 +230,43 @@ def handle_tts(text_input, voice_name, speed, progress=gr.Progress()):
 
     except Exception as e:
         logger.exception("TTS failed")
-        gr.Error(str(e))
-        return None, None
+        raise gr.Error(_friendly_error(e))
+
+
+def _char_count_md(text, engine):
+    """Live 'N / limit caracteres' hint (turns red when over the limit)."""
+    n = len(text or "")
+    limit = engine_char_limit(engine)
+    color = "#E0533A" if n > limit else "#8C8C9A"
+    return f"<span style='color:{color};font-size:0.8rem'>{n:,} / {limit:,} caracteres</span>"
+
+
+def _engine_info(engine, limit):
+    """Dropdown helper text; for OpenAI, surface the remaining daily budget."""
+    if engine == ENGINE_OPENAI:
+        return (f"Premium (de pago, financiado por el dueño del Space). "
+                f"Máximo {limit:,} caracteres. Hoy quedan ~{openai_budget_remaining():,}.")
+    return f"Máximo {limit:,} caracteres para este motor."
+
+
+def on_tts_engine_change(engine, text):
+    """Update voice list + control visibility + counter when engine changes."""
+    voices = get_voices(engine)
+    limit = engine_char_limit(engine)
+    is_openai = engine == ENGINE_OPENAI
+    # Clear any stale custom instruction when leaving OpenAI so it can't quietly
+    # steer a later run; leave it untouched while on OpenAI.
+    instr_update = (gr.update(visible=True) if is_openai
+                    else gr.update(visible=False, value=""))
+    return (
+        gr.update(choices=voices, value=(voices[0] if voices else None)),
+        gr.update(visible=is_openai),          # style preset (OpenAI only)
+        instr_update,                          # custom instructions (OpenAI only)
+        gr.update(visible=(engine == ENGINE_EDGE)),  # pitch (Edge only)
+        gr.update(visible=(not is_openai)),    # mastering (not for OpenAI)
+        gr.update(info=_engine_info(engine, limit)),  # engine dropdown info
+        _char_count_md(text, engine),          # char counter
+    )
 
 
 # ===================================================================
@@ -133,9 +278,10 @@ def build_ui():
 
     ai_available = is_model_available()
     status_text = (
-        "DeepFilterNet AI model is available" if ai_available
-        else "DeepFilterNet not found — FFmpeg fallback"
+        "Modelo DeepFilterNet activo" if ai_available
+        else "DeepFilterNet no disponible — respaldo FFmpeg"
     )
+    status_color = "#00FF66" if ai_available else "#E0A33A"  # green vs amber
 
     # ------------------------------------------------------------------
     # CSS — Midnight Luxe + Tab Navigation
@@ -163,7 +309,7 @@ def build_ui():
         position: fixed;
         top: 0; left: 0; width: 100vw; height: 100vh;
         pointer-events: none;
-        z-index: 9999;
+        z-index: 1;            /* decorative: stay below dropdowns/audio controls */
         opacity: 0.2;
         mix-blend-mode: overlay;
         background: url('data:image/svg+xml;utf8,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="n"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="4" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23n)"/%3E%3C/svg%3E');
@@ -202,7 +348,7 @@ def build_ui():
         gap: 8px;
         font-family: "JetBrains Mono", monospace;
         font-size: 0.72rem;
-        color: #6B6B7A;
+        color: #8C8C9A;
         letter-spacing: 0.05em;
     }
     .pulse-dot {
@@ -230,7 +376,7 @@ def build_ui():
         background: transparent !important;
         border: 1px solid rgba(250,248,245,0.08) !important;
         border-radius: 2rem !important;
-        color: #6B6B7A !important;
+        color: #8C8C9A !important;
         font-family: "Inter", sans-serif !important;
         font-size: 0.95rem !important;
         font-weight: 500 !important;
@@ -280,7 +426,7 @@ def build_ui():
     .section-desc {
         font-family: "Inter", sans-serif;
         font-size: 1.05rem;
-        color: #6B6B7A;
+        color: #8C8C9A;
         max-width: 700px;
         margin: 0 auto;
         line-height: 1.7;
@@ -367,7 +513,7 @@ def build_ui():
     }
     .step-desc {
         font-size: 0.82rem;
-        color: #6B6B7A;
+        color: #8C8C9A;
         line-height: 1.4;
     }
     .pipeline-arrow {
@@ -384,7 +530,13 @@ def build_ui():
     @media (max-width: 768px) {
         .pipeline-flow { flex-direction: column; }
         .pipeline-arrow { justify-content: center; transform: rotate(90deg); }
-        .suite-header { flex-direction: column; gap: 1rem; }
+        .suite-header { flex-direction: column; gap: 1rem; padding: 1rem 1.25rem; }
+        /* Tighter padding + wrap so the 3 tabs and the form fit small screens */
+        .tabitem { padding: 1.25rem 1rem 2rem !important; }
+        .tabs > .tab-nav { flex-wrap: wrap !important; padding: 1rem 1rem 0 !important; }
+        .tabs > .tab-nav > button { padding: 0.6rem 1.1rem !important; font-size: 0.85rem !important; }
+        .section-title { font-size: 1.6rem !important; }
+        .centered-action { max-width: 100% !important; }
     }
 
     /* ── Footer ── */
@@ -394,7 +546,7 @@ def build_ui():
         border-top: 1px solid rgba(250,248,245,0.04);
         font-family: "JetBrains Mono", monospace;
         font-size: 0.7rem;
-        color: #3A3A45;
+        color: #6B6B7A;
         letter-spacing: 0.1em;
     }
 
@@ -450,12 +602,12 @@ def build_ui():
         gr.HTML('<div class="noise-bg"></div>')
 
         # ── Card frame start ──
-        # Header with brand + status
+        # Header with brand + status (dot color reflects real availability)
         gr.HTML(f"""
             <div class="suite-header">
                 <span class="suite-brand">Majes de Sivar</span>
-                <span class="suite-status">
-                    <span class="pulse-dot"></span>
+                <span class="suite-status" role="status" aria-label="Estado: {status_text}">
+                    <span class="pulse-dot" style="background:{status_color};box-shadow:0 0 8px {status_color};"></span>
                     {status_text}
                 </span>
             </div>
@@ -476,12 +628,18 @@ def build_ui():
                         </h2>
                         <p class="section-desc">
                             Transforma grabaciones ordinarias en audio de estudio
-                            con <strong>Resemble Enhance</strong> y <strong>DeepFilterNet</strong>.
+                            con IA (<strong>DeepFilterNet</strong>) y una cadena de
+                            <strong>masterización profesional</strong>.
                             Procesamiento <strong>100% local</strong> — cero latencia,
                             máxima privacidad, control milimétrico sin destruir tu voz.
                         </p>
                     </div>
                 """)
+
+                # Only offer engines that are actually installed (mirrors TTS).
+                _enh_engines = ["DeepFilterNet"] + (
+                    ["Resemble Enhance"] if is_resemble_available() else []
+                )
 
                 with gr.Row():
                     with gr.Column(scale=1):
@@ -492,31 +650,42 @@ def build_ui():
                             elem_id="enh-input",
                         )
                         gr.Markdown(
-                            "*Formatos:* `WAV` `MP3` `M4A` `FLAC` `OGG` `AAC`"
+                            "*Formatos:* `WAV` `MP3` `M4A` `FLAC` `OGG` `AAC` `WMA` · máx. 500 MB\n\n"
+                            "*La salida se optimiza como voz mono a 48 kHz.*"
                         )
                         enh_engine = gr.Radio(
                             label="Motor de IA",
-                            choices=["DeepFilterNet", "Resemble Enhance"],
+                            choices=_enh_engines,
                             value="DeepFilterNet",
+                            visible=(len(_enh_engines) > 1),
                             elem_id="enh-engine",
                         )
 
                     with gr.Column(scale=1):
+                        enh_original = gr.Audio(
+                            label="Original (antes)",
+                            type="filepath",
+                            interactive=False,
+                            elem_id="enh-original",
+                        )
                         enh_output = gr.Audio(
-                            label="Audio Mejorado",
+                            label="Audio Mejorado (después)",
                             type="filepath",
                             interactive=False,
                             elem_id="enh-output",
                         )
                         enh_download = gr.File(
-                            label="Descargar",
+                            label="Descargar audio mejorado",
                             elem_id="enh-download",
                         )
+
+                # Load the uploaded file into the "before" player for A/B compare.
+                enh_input.change(lambda p: p, inputs=enh_input, outputs=enh_original)
 
                 with gr.Column(elem_classes="centered-action"):
                     with gr.Accordion("Configuración avanzada", open=False):
                         enh_strength = gr.Dropdown(
-                            label="Intensidad (DeepFilterNet)",
+                            label="Intensidad",
                             choices=["gentle", "balanced", "aggressive",
                                      "maximum"],
                             value="balanced",
@@ -552,7 +721,7 @@ def build_ui():
                             <div class="pipeline-step">
                                 <div class="step-num">02</div>
                                 <div class="step-name">Motor de IA</div>
-                                <div class="step-desc"><strong>Resemble Enhance</strong> o <strong>DeepFilterNet</strong>. Denoising + super-resolución.</div>
+                                <div class="step-desc"><strong>DeepFilterNet</strong>. Denoising neuronal que limpia el ruido sin destruir la voz.</div>
                             </div>
                             <div class="pipeline-arrow">➔</div>
                             <div class="pipeline-step">
@@ -582,9 +751,9 @@ def build_ui():
                         </h2>
                         <p class="section-desc">
                             Sube cualquier archivo de video y obtén la pista de audio
-                            en calidad <strong>PCM 24-bit / 48kHz</strong> —
-                            sin recompresión, sin pérdida, sin intermediarios.
-                            Potenciado por <strong>FFmpeg 8.0</strong>.
+                            en alta fidelidad: <strong>WAV/FLAC 24-bit / 48kHz</strong>
+                            (sin pérdida) o <strong>MP3</strong> (ligero).
+                            Potenciado por <strong>FFmpeg</strong>.
                         </p>
                     </div>
                 """)
@@ -598,17 +767,21 @@ def build_ui():
                             elem_id="ext-input",
                         )
                         gr.Markdown(
-                            "*Formatos:* `MP4` `MKV` `AVI` `MOV` `WEBM` `FLV`"
+                            "*Formatos:* "
+                            + " ".join(f"`{e[1:].upper()}`" for e in sorted(VIDEO_FORMATS))
+                            + " · máx. 500 MB / 30 min"
                         )
                         ext_format = gr.Radio(
                             label="Formato de salida",
                             choices=["wav", "flac", "mp3"],
                             value="wav",
-                            info="WAV = sin pérdida. FLAC = comprimido sin pérdida. MP3 = comprimido.",
+                            info="WAV = sin pérdida (el más pesado). FLAC = sin pérdida comprimido. "
+                                 "MP3 = ligero. Para videos largos usa FLAC o MP3.",
                             elem_id="ext-format",
                         )
 
                     with gr.Column(scale=1):
+                        ext_info = gr.Markdown(visible=True, elem_id="ext-info")
                         ext_output = gr.Audio(
                             label="Audio Extraído",
                             type="filepath",
@@ -616,7 +789,7 @@ def build_ui():
                             elem_id="ext-output",
                         )
                         ext_download = gr.File(
-                            label="Descargar",
+                            label="Descargar audio extraído",
                             elem_id="ext-download",
                         )
 
@@ -630,7 +803,7 @@ def build_ui():
                 ext_btn.click(
                     fn=handle_extract,
                     inputs=[ext_input, ext_format],
-                    outputs=[ext_output, ext_download],
+                    outputs=[ext_output, ext_download, ext_info],
                 )
 
                 # Extract pipeline
@@ -671,12 +844,19 @@ def build_ui():
                         </h2>
                         <p class="section-desc">
                             Genera narraciones con voces <strong>indistinguibles de un humano</strong>.
-                            Motor neural <strong>Azure Cognitive Services</strong> —
-                            18+ voces premium en español, inglés, portugués, francés,
-                            alemán, italiano y japonés.
+                            Elige entre <strong>tres motores</strong>: Edge Neural (gratis),
+                            <strong>Kokoro HD</strong> (local, sin coste por uso) y
+                            <strong>OpenAI Studio</strong> (premium, voz dirigible por emoción).
+                            <br><span style="font-size:0.85rem;color:#8C8C9A;">Nota: Kokoro
+                            es 100% local; Edge y OpenAI envían el texto a sus servidores.</span>
                         </p>
                     </div>
                 """)
+
+                _tts_engines = available_engines()
+                _tts_engine0 = _tts_engines[0]
+                _tts_voices0 = get_voices(_tts_engine0)
+                _openai_on = _tts_engine0 == ENGINE_OPENAI
 
                 with gr.Row():
                     with gr.Column(scale=1):
@@ -687,17 +867,61 @@ def build_ui():
                             max_lines=20,
                             elem_id="tts-text",
                         )
+                        tts_counter = gr.Markdown(
+                            _char_count_md("", _tts_engine0),
+                            elem_id="tts-counter",
+                        )
+                        tts_engine = gr.Dropdown(
+                            label="Motor de voz",
+                            choices=_tts_engines,
+                            value=_tts_engine0,
+                            info=_engine_info(_tts_engine0, engine_char_limit(_tts_engine0)),
+                            elem_id="tts-engine",
+                        )
                         tts_voice = gr.Dropdown(
                             label="Voz",
-                            choices=list(VOICE_CATALOG.keys()),
-                            value=list(VOICE_CATALOG.keys())[0],
+                            choices=_tts_voices0,
+                            value=(_tts_voices0[0] if _tts_voices0 else None),
                             elem_id="tts-voice",
                         )
                         tts_speed = gr.Radio(
                             label="Velocidad",
-                            choices=list(SPEED_PRESETS.keys()),
+                            choices=SPEED_PRESETS,
                             value="Normal",
                             elem_id="tts-speed",
+                        )
+                        # ── Emotion controls (OpenAI premium only) ──
+                        tts_style = gr.Dropdown(
+                            label="Estilo / Emoción",
+                            choices=list(OPENAI_STYLE_PRESETS.keys()),
+                            value="Narrador profesional",
+                            visible=_openai_on,
+                            info="Dirige el tono de la voz (solo OpenAI Studio).",
+                            elem_id="tts-style",
+                        )
+                        tts_instructions = gr.Textbox(
+                            label="Instrucciones personalizadas (opcional)",
+                            placeholder="Ej: Habla como un locutor de radio nocturna, voz grave y relajada...",
+                            lines=2,
+                            visible=_openai_on,
+                            info="Si lo rellenas, sobrescribe el estilo de arriba.",
+                            elem_id="tts-instructions",
+                        )
+                        # ── Pitch control (Edge only) ──
+                        tts_pitch = gr.Radio(
+                            label="Tono",
+                            choices=list(PITCH_PRESETS.keys()),
+                            value="Normal",
+                            visible=(_tts_engine0 == ENGINE_EDGE),
+                            elem_id="tts-pitch",
+                        )
+                        tts_master = gr.Checkbox(
+                            label="Masterizar audio (voz más nítida y volumen parejo)",
+                            value=True,
+                            visible=(not _openai_on),
+                            info="Recorta silencios y normaliza el volumen. Recomendado. "
+                                 "(No aplica a OpenAI, que ya entrega audio masterizado).",
+                            elem_id="tts-master",
                         )
 
                     with gr.Column(scale=1):
@@ -708,7 +932,7 @@ def build_ui():
                             elem_id="tts-output",
                         )
                         tts_download = gr.File(
-                            label="Descargar",
+                            label="Descargar audio generado",
                             elem_id="tts-download",
                         )
 
@@ -719,9 +943,38 @@ def build_ui():
                         size="lg",
                     )
 
+                # Sample texts so a first-time visitor can hear quality instantly.
+                gr.Examples(
+                    examples=[
+                        ["El pedido número 4521 cuesta $1.299,50 y llega el 15/03/2026."],
+                        ["Bienvenidos a Majes de Sivar. Hoy te contamos cómo la "
+                         "inteligencia artificial está transformando el audio."],
+                        ["Respira hondo. Relaja los hombros. Todo está en calma, "
+                         "y tienes el tiempo que necesitas."],
+                        ["Última hora: el comité anunció los resultados a las 14:30 "
+                         "de hoy, con una participación del 87 %."],
+                    ],
+                    inputs=[tts_text],
+                    label="Ejemplos (haz clic para probar)",
+                )
+
+                tts_text.input(
+                    fn=_char_count_md,
+                    inputs=[tts_text, tts_engine],
+                    outputs=[tts_counter],
+                )
+
+                tts_engine.change(
+                    fn=on_tts_engine_change,
+                    inputs=[tts_engine, tts_text],
+                    outputs=[tts_voice, tts_style, tts_instructions,
+                             tts_pitch, tts_master, tts_engine, tts_counter],
+                )
+
                 tts_btn.click(
                     fn=handle_tts,
-                    inputs=[tts_text, tts_voice, tts_speed],
+                    inputs=[tts_text, tts_engine, tts_voice, tts_speed,
+                            tts_style, tts_instructions, tts_pitch, tts_master],
                     outputs=[tts_output, tts_download],
                 )
 
@@ -738,8 +991,8 @@ def build_ui():
                             <div class="pipeline-arrow">➔</div>
                             <div class="pipeline-step">
                                 <div class="step-num">02</div>
-                                <div class="step-name">Neural TTS</div>
-                                <div class="step-desc">Modelo neural de <strong>Azure Cognitive</strong> con expresividad natural.</div>
+                                <div class="step-name">Motor Neural</div>
+                                <div class="step-desc"><strong>Edge</strong>, <strong>Kokoro HD</strong> u <strong>OpenAI</strong>. Síntesis con expresividad y emoción dirigible.</div>
                             </div>
                             <div class="pipeline-arrow">➔</div>
                             <div class="pipeline-step final-step">
@@ -754,7 +1007,7 @@ def build_ui():
         # ── Footer ──
         gr.HTML("""
             <div class="suite-footer">
-                MAJES DE SIVAR · AUDIO SUITE · ALL PROCESSING LOCAL · ZERO CLOUD LATENCY
+                MAJES DE SIVAR · AUDIO SUITE · ENHANCE, EXTRACT &amp; KOKORO RUN LOCALLY
             </div>
         """)
 
@@ -775,6 +1028,8 @@ if __name__ == "__main__":
     is_hf_space = os.environ.get("SPACE_ID") is not None
 
     app, theme, css = build_ui()
+    # In Gradio 6, theme/css belong on launch() (not on the Blocks constructor).
+    app.queue(default_concurrency_limit=1, max_size=20)  # protect the CPU tier
     app.launch(
         server_name="0.0.0.0",
         server_port=7860,
@@ -782,5 +1037,5 @@ if __name__ == "__main__":
         show_error=True,
         theme=theme,
         css=css,
-        allowed_paths=[os.path.abspath("assets")],
+        allowed_paths=[os.path.abspath(os.path.join(os.path.dirname(__file__), "assets"))],
     )

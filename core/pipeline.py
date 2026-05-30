@@ -74,12 +74,12 @@ def run_pipeline(input_path: str,
     progress_callback(0.05, "Validando archivo de entrada...")
 
     if not input_path or not os.path.isfile(input_path):
-        raise ValueError("No valid audio file provided. Please upload an audio file.")
+        raise ValueError("No se proporcionó un archivo de audio válido. Sube un archivo de audio.")
 
     file_size_mb = os.path.getsize(input_path) / (1024 * 1024)
     if file_size_mb > 500:
         raise ValueError(
-            f"File is too large ({file_size_mb:.1f} MB). Maximum size is 500 MB."
+            f"El archivo es demasiado grande ({file_size_mb:.1f} MB). El tamaño máximo es 500 MB."
         )
 
     input_info = get_audio_info(input_path)
@@ -120,7 +120,8 @@ def run_pipeline(input_path: str,
             atten_label = f"{atten} dB" if atten else "sin limite"
             progress_callback(
                 0.30,
-                f"Ejecutando DeepFilterNet ({enhancement_strength}: {atten_label})..."
+                f"Ejecutando DeepFilterNet ({enhancement_strength}: {atten_label}) — "
+                f"puede tardar varios minutos en CPU..."
             )
             enhanced_path = enhance_with_ai(
                 converted_path, strength=enhancement_strength,
@@ -156,10 +157,7 @@ def run_pipeline(input_path: str,
     _cleanup_temp_files(converted_path, enhanced_path, postprocessed_path)
     progress_callback(1.0, "Mejora completada!")
 
-    # Build status message
-    duration = input_info.get("duration_seconds", "?")
-    status = ""
-
+    status = f"Mejorado con {engine_used}."
     logger.info(status)
     return final_output_path, status
 
