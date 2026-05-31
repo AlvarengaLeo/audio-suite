@@ -630,6 +630,24 @@ def build_ui():
     .gradio-container .markdown { color: #E8E6E1 !important; }
     .gradio-container .prose code { color: #E0C068 !important; background: rgba(201,168,76,0.10); }
 
+    /* Icons (record / upload / trash / play…): they inherit `currentColor`,
+       which was dark on dark — force them light so they're visible. */
+    .gradio-container button svg,
+    .gradio-container .icon-button svg,
+    .gradio-container [class*="icon"] svg,
+    .gradio-container .source-selection svg,
+    .gradio-container label svg { color: #F5F3EF !important; opacity: 0.92; }
+    .gradio-container button:hover svg { color: #FFFFFF !important; opacity: 1; }
+    /* Audio/file widget helper text & timestamps */
+    .gradio-container .info,
+    .gradio-container .block-info,
+    .gradio-container small,
+    .gradio-container .wrap .or,
+    .gradio-container .time,
+    .gradio-container [class*="time"] { color: #A9A9B8 !important; }
+    .gradio-container .upload-text,
+    .gradio-container .wrap-text { color: #CFCFDA !important; }
+
     /* gr.Examples table */
     .gradio-container .examples table,
     .gradio-container .examples td,
@@ -673,11 +691,10 @@ def build_ui():
     /* Aurora glow — dark luxe ambient light behind the content */
     .aurora {
         position: fixed; top: -15%; left: -10%; right: -10%; height: 65vh;
-        z-index: 0; pointer-events: none; filter: blur(70px); opacity: 0.55;
+        z-index: 0; pointer-events: none; filter: blur(100px); opacity: 0.32;
         background:
-          radial-gradient(40% 60% at 18% 28%, rgba(201,168,76,0.20), transparent 70%),
-          radial-gradient(35% 55% at 82% 18%, rgba(224,192,104,0.14), transparent 70%),
-          radial-gradient(34% 52% at 55% 85%, rgba(110,86,190,0.12), transparent 70%);
+          radial-gradient(40% 60% at 18% 22%, rgba(201,168,76,0.16), transparent 72%),
+          radial-gradient(34% 52% at 84% 16%, rgba(224,192,104,0.10), transparent 72%);
         animation: aurora-drift 20s ease-in-out infinite alternate;
         will-change: transform;
     }
@@ -776,7 +793,7 @@ def build_ui():
     with gr.Blocks(title="Majes de Sivar — Audio Suite") as app:
 
         # Noise overlay
-        gr.HTML('<div class="aurora"></div><div class="noise-bg"></div>')
+        gr.HTML('<div class="aurora"></div>')
 
         # ── Card frame start ──
         # Header with brand + status (dot color reflects real availability)
