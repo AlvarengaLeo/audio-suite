@@ -960,7 +960,7 @@ def build_ui():
 
                 gr.HTML("""
                     <div class="how-to">
-                        <div class="how-step"><span class="n">1</span><span class="t"><b>Sube un video</b> (MP4, MKV, MOV… máx. 500 MB / 30 min).</span></div>
+                        <div class="how-step"><span class="n">1</span><span class="t"><b>Sube un video</b> (MP4, MKV, MOV… hasta 4 h, sin límite de tamaño).</span></div>
                         <div class="how-step"><span class="n">2</span><span class="t">Elige el <b>formato</b>: WAV/FLAC (sin pérdida) o MP3 (ligero).</span></div>
                         <div class="how-step"><span class="n">3</span><span class="t">Pulsa <b>Extraer Audio</b> y descarga la pista.</span></div>
                     </div>
@@ -977,7 +977,7 @@ def build_ui():
                         gr.Markdown(
                             "*Formatos:* "
                             + " ".join(f"`{e[1:].upper()}`" for e in sorted(VIDEO_FORMATS))
-                            + " · máx. 500 MB / 30 min"
+                            + " · hasta 4 h, sin límite de tamaño"
                         )
                         ext_format = gr.Radio(
                             label="Formato de salida",
