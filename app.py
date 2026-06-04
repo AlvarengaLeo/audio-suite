@@ -148,15 +148,10 @@ def handle_extract(video_input, out_format, progress=gr.Progress()):
         logger.info(f"Video info: {info}")
 
         # --- Guards (protect the free CPU tier before invoking ffmpeg) ---
-        size_mb = os.path.getsize(video_input) / (1024 * 1024)
-        if size_mb > 500:
+        # Sin límite de tamaño: solo se acota la duración (hasta 4 horas).
+        if info.get("duration", 0) > 14400:  # 4 horas
             raise ValueError(
-                f"El video es demasiado grande ({size_mb:.0f} MB). "
-                f"El máximo es 500 MB."
-            )
-        if info.get("duration", 0) > 1800:  # 30 min
-            raise ValueError(
-                "El video supera el límite de 30 minutos del plan gratuito. "
+                "El video supera el límite de 4 horas. "
                 "Recorta o sube un clip más corto."
             )
         if not info.get("has_audio", True):

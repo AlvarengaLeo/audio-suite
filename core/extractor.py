@@ -78,7 +78,7 @@ def extract_audio(video_path: str, output_format: str = "wav") -> str:
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300
+            cmd, capture_output=True, text=True, timeout=14400  # hasta 4 h
         )
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg error: {result.stderr[-500:]}")
@@ -91,7 +91,7 @@ def extract_audio(video_path: str, output_format: str = "wav") -> str:
         return output_path
 
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Audio extraction timed out (>5 min).")
+        raise RuntimeError("Audio extraction timed out (>4 h).")
     except FileNotFoundError:
         raise RuntimeError(
             "FFmpeg not found. Please install FFmpeg and add it to PATH."
