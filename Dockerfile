@@ -65,6 +65,15 @@ RUN python -c "from kokoro import KPipeline; KPipeline(lang_code='e'); KPipeline
 RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('myshell-ai/OpenVoiceV2')" || \
     echo "OpenVoice V2 checkpoints will download on first use."
 
+# Pre-download the whisper models used by Audio → Texto so the first request is
+# fast: 'base' (default S1) and 'large-v3' (S2 max-quality rectification). The
+# Space has network at runtime, so these are NON-fatal — any other size (tiny/
+# small/medium) downloads on demand into the HF cache.
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')" || \
+    echo "Whisper 'base' will download on first use."
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')" || \
+    echo "Whisper 'large-v3' will download on first use."
+
 # HF Spaces expects port 7860
 EXPOSE 7860
 

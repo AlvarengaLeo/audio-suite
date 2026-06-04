@@ -37,11 +37,15 @@ from core.enhancer import is_model_available, is_resemble_available
 from core.extractor import extract_audio, get_video_info, VIDEO_FORMATS
 from core.tts import (
     synthesize_speech, available_engines, get_voices,
-    engine_char_limit, openai_budget_remaining,
+    engine_char_limit, openai_budget_remaining, is_openai_available,
     SPEED_PRESETS, PITCH_PRESETS, OPENAI_STYLE_PRESETS,
     ENGINE_EDGE, ENGINE_OPENAI,
 )
 from core.voice_clone import clone_voice, is_clone_available
+from core.transcriber import (
+    transcribe_audio, is_transcribe_available,
+    TRANSCRIBE_MODELS, DEFAULT_MODEL, TRANSCRIBE_LANGUAGES,
+)
 
 OUTPUTS_DIR = os.path.join(os.path.dirname(__file__), "outputs")
 
@@ -182,6 +186,79 @@ def handle_extract(video_input, out_format, progress=gr.Progress()):
 
     except Exception as e:
         logger.exception("Extraction failed")
+        raise gr.Error(_friendly_error(e))
+
+
+def _format_transcribe_note(note: dict) -> str:
+    """Short Spanish quality line for the transcription tab."""
+    try:
+        secs = int(note.get("duration", 0) or 0)
+        dur = f"{secs // 60}:{secs % 60:02d}" if secs else "—"
+        parts = [
+            f"**Modelo:** {note.get('model', '?')}",
+            f"**Idioma:** {note.get('language', '?')}",
+            f"**Duración:** {dur}",
+        ]
+        rs = note.get("rectified_spans", 0)
+        if rs:
+            parts.append(
+                f"**Rectificados:** {rs} fragmento(s) "
+                f"(~{note.get('rectified_pct', 0)}% del audio)"
+            )
+        if note.get("proof_applied"):
+            used = note.get("proof_chars_used", 0)
+            rev = note.get("proof_reverted", 0)
+            extra = f", {rev} revertido(s)" if rev else ""
+            parts.append(f"**Pulido IA:** sí ({used:,} car.{extra})")
+        elif note.get("proof_reason"):
+            parts.append(f"**Pulido IA:** {note.get('proof_reason')}")
+        return "  ·  ".join(parts)
+    except Exception:
+        return ""
+
+
+def handle_transcribe(audio_input, model_size, language_label,
+                      rectify_on, proof_on, progress=gr.Progress()):
+    """Audio → Texto handler: transcripción auto-verificada (faster-whisper)."""
+    if not audio_input:
+        gr.Warning("Sube un archivo de audio primero.")
+        return "", None, ""
+    if not is_transcribe_available():
+        raise gr.Error(
+            "El motor de transcripción (faster-whisper) no está disponible "
+            "en este entorno."
+        )
+
+    try:
+        progress(0.05, desc="Cargando modelo y transcribiendo...")
+
+        def cb(frac):
+            progress(max(0.05, min(0.99, frac)), desc="Transcribiendo (CPU)...")
+
+        text, note = transcribe_audio(
+            audio_input, model_size=model_size, language_label=language_label,
+            rectify_on=rectify_on, proof_on=proof_on, progress_cb=cb,
+        )
+        if not text.strip():
+            text = "(No se detectó habla en el audio.)"
+
+        # Guardar .txt UTF-8 (sin BOM) en outputs/ con nombre limpio.
+        os.makedirs(OUTPUTS_DIR, exist_ok=True)
+        prune_outputs()
+        base = _slug(
+            os.path.splitext(os.path.basename(audio_input))[0],
+            fallback="transcripcion",
+        )
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        txt_path = os.path.join(OUTPUTS_DIR, f"{base}_transcripcion_{ts}.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+        progress(1.0, desc="¡Transcripción lista!")
+        return text, txt_path, _format_transcribe_note(note)
+
+    except Exception as e:
+        logger.exception("Transcription failed")
         raise gr.Error(_friendly_error(e))
 
 
@@ -1041,7 +1118,108 @@ def build_ui():
                 """)
 
             # ════════════════════════════════════════════
-            #  TAB 3 — TEXT-TO-AUDIO
+            #  TAB 3 — AUDIO → TEXTO (transcripción auto-verificada)
+            # ════════════════════════════════════════════
+            with gr.Tab("Audio → Texto"):
+                gr.HTML("""
+                    <div class="section-hero">
+                        <h2 class="section-title">
+                            Transcripción con
+                            <span class="section-italic">Precisión Verificada.</span>
+                        </h2>
+                        <p class="section-desc">
+                            Sube un audio y obtén su <strong>texto limpio</strong>. El
+                            modelo <strong>re-verifica los fragmentos dudosos</strong>
+                            para corregirse a sí mismo y, opcionalmente, pule tildes y
+                            puntuación con IA. Potenciado por
+                            <strong>faster-whisper</strong>.
+                        </p>
+                    </div>
+                """)
+
+                gr.HTML("""
+                    <div class="how-to">
+                        <div class="how-step"><span class="n">1</span><span class="t"><b>Sube un audio</b> (sin límite de duración / tamaño).</span></div>
+                        <div class="how-step"><span class="n">2</span><span class="t">Elige <b>modelo</b> e <b>idioma</b>; activa rectificación o pulido si quieres.</span></div>
+                        <div class="how-step"><span class="n">3</span><span class="t">Pulsa <b>Transcribir</b> y copia o descarga el <b>.txt</b>.</span></div>
+                    </div>
+                """)
+
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        trans_input = gr.Audio(
+                            label="Subir audio",
+                            sources=["upload", "microphone"],
+                            type="filepath",
+                            elem_id="trans-input",
+                        )
+                        gr.Markdown(
+                            "*Sin límite de duración/tamaño. En CPU el audio largo "
+                            "tarda; la rectificación de máxima calidad puede añadir "
+                            "bastante tiempo en grabaciones de horas.*"
+                        )
+                        trans_model = gr.Dropdown(
+                            label="Modelo",
+                            choices=TRANSCRIBE_MODELS,
+                            value=DEFAULT_MODEL,
+                            info="Mayor = más preciso pero más lento en CPU.",
+                            elem_id="trans-model",
+                        )
+                        trans_lang = gr.Dropdown(
+                            label="Idioma",
+                            choices=list(TRANSCRIBE_LANGUAGES.keys()),
+                            value="Auto",
+                            info="Auto detecta el idioma; fíjalo si lo conoces.",
+                            elem_id="trans-lang",
+                        )
+                        trans_rectify = gr.Checkbox(
+                            label="Rectificar segmentos dudosos (máxima calidad)",
+                            value=True,
+                            info="Re-transcribe con large-v3 los fragmentos de baja "
+                                 "confianza. Mejora la precisión; añade tiempo.",
+                            elem_id="trans-rectify",
+                        )
+                        trans_proof = gr.Checkbox(
+                            label="Pulido de texto con IA (requiere API key)",
+                            value=False,
+                            interactive=is_openai_available(),
+                            info="Corrige tildes/puntuación/mayúsculas SIN cambiar "
+                                 "palabras (OpenAI). Usa tu presupuesto diario.",
+                            elem_id="trans-proof",
+                        )
+
+                    with gr.Column(scale=1):
+                        trans_note = gr.Markdown(visible=True, elem_id="trans-note")
+                        trans_text = gr.Textbox(
+                            label="Texto transcrito",
+                            placeholder="Aquí aparecerá la transcripción...",
+                            lines=16,
+                            max_lines=30,
+                            show_copy_button=True,
+                            interactive=True,
+                            elem_id="trans-text",
+                        )
+                        trans_download = gr.File(
+                            label="Descargar .txt",
+                            elem_id="trans-download",
+                        )
+
+                with gr.Column(elem_classes="centered-action"):
+                    trans_btn = gr.Button(
+                        "Transcribir",
+                        variant="primary",
+                        size="lg",
+                    )
+
+                trans_btn.click(
+                    fn=handle_transcribe,
+                    inputs=[trans_input, trans_model, trans_lang,
+                            trans_rectify, trans_proof],
+                    outputs=[trans_text, trans_download, trans_note],
+                )
+
+            # ════════════════════════════════════════════
+            #  TAB 4 — TEXT-TO-AUDIO
             # ════════════════════════════════════════════
             with gr.Tab("Text-to-Audio"):
                 gr.HTML("""
@@ -1221,7 +1399,7 @@ def build_ui():
                 """)
 
             # ════════════════════════════════════════════
-            #  TAB 4 — CLONAR VOZ (ZeroGPU)
+            #  TAB 5 — CLONAR VOZ (ZeroGPU)
             # ════════════════════════════════════════════
             with gr.Tab("Clonar Voz"):
                 gr.HTML("""
