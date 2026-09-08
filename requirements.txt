@@ -2,7 +2,10 @@
 # reproducible image, pin exact versions from a `pip freeze` of a known-good build.
 
 # Core
-gradio>=6.0.0
+# Pin exacto: Gradio 6 elimino kwargs sin aviso entre minors (p.ej.
+# Textbox(show_copy_button=...)) y aqui no hay lockfile, asi que un rebuild
+# del Space con una minor nueva puede tumbar la app al arrancar.
+gradio==6.26.0
 numpy>=1.24
 soundfile>=0.12
 

@@ -1195,7 +1195,6 @@ def build_ui():
                             placeholder="Aquí aparecerá la transcripción...",
                             lines=16,
                             max_lines=30,
-                            show_copy_button=True,
                             interactive=True,
                             elem_id="trans-text",
                         )
